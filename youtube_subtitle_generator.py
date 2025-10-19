@@ -310,13 +310,13 @@ class YouTubeSubtitleGenerator:
             messagebox.showwarning("警告", f"Whisper模型不存在: {whisper_model}")
             return
 
-        # 扫描MP3文件
-        mp3_files = list(Path(directory).glob("*.mp3"))
+        # 扫描MP3文件（包括子文件夹）
+        mp3_files = list(Path(directory).rglob("*.mp3"))
         if not mp3_files:
-            messagebox.showwarning("警告", f"在 {directory} 中没有找到MP3文件")
+            messagebox.showwarning("警告", f"在 {directory} 及其子文件夹中没有找到MP3文件")
             return
 
-        self.log(f"找到 {len(mp3_files)} 个MP3文件")
+        self.log(f"找到 {len(mp3_files)} 个MP3文件（包括子文件夹）")
 
         # 开始处理
         self.processing = True
