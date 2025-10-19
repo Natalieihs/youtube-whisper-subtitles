@@ -2,7 +2,8 @@
 
 # YouTube字幕生成器 - Mac应用打包脚本
 
-cd ~/Downloads/AWS课程
+# 切换到脚本所在目录
+cd "$(dirname "$0")"
 
 echo "========================================"
 echo "  YouTube字幕生成器 - 应用打包"
