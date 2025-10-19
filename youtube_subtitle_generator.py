@@ -2,12 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-YouTube 字幕生成器 v2.0
+YouTube 字幕生成器
 功能：
 1. 从YouTube下载视频并转换为MP3
 2. 使用whisper.cpp自动生成中文字幕
-3. 美化的UI界面
-4. 改进的线程处理
 """
 
 import tkinter as tk
@@ -15,6 +13,7 @@ from tkinter import ttk, filedialog, scrolledtext, messagebox
 import subprocess
 import threading
 import os
+import re
 import shutil
 from pathlib import Path
 from datetime import datetime
@@ -22,10 +21,12 @@ import queue
 
 def find_executable(name):
     """查找可执行文件的完整路径"""
+    # 首先尝试使用 shutil.which
     path = shutil.which(name)
     if path:
         return path
 
+    # 如果失败，尝试常见路径
     common_paths = [
         f'/usr/local/bin/{name}',
         f'/opt/homebrew/bin/{name}',
@@ -37,25 +38,27 @@ def find_executable(name):
         if os.path.exists(path) and os.access(path, os.X_OK):
             return path
 
+    # 如果都失败，返回名称本身（让系统尝试）
     return name
 
 class YouTubeSubtitleGenerator:
     def __init__(self, root):
         self.root = root
-        self.root.title("YouTube 字幕生成器 v2.0")
-        self.root.geometry("1000x780")
-        self.root.resizable(True, True)
+        self.root.title("YouTube 字幕生成器")
+        self.root.geometry("1000x750")
 
-        # 主题颜色
+        # 设置主题颜色
         self.colors = {
-            'bg': '#F5F7FA',
-            'primary': '#FF0000',
-            'secondary': '#1E90FF',
+            'bg': '#f0f0f5',
+            'primary': '#FF0000',  # YouTube红色
+            'secondary': '#64C8FF',  # 字幕蓝色
             'success': '#10B981',
-            'text': '#2D3748',
-            'text_light': '#718096',
+            'warning': '#F59E0B',
+            'error': '#EF4444',
+            'text': '#1F2937',
+            'text_light': '#6B7280',
             'white': '#FFFFFF',
-            'border': '#E2E8F0'
+            'border': '#E5E7EB'
         }
 
         self.root.configure(bg=self.colors['bg'])
@@ -66,248 +69,62 @@ class YouTubeSubtitleGenerator:
         self.whisper_bin = "/tmp/whisper.cpp/build/bin/whisper-cli"
         self.whisper_model = "/tmp/whisper.cpp/models/ggml-base-q5_1.bin"
 
-        # 消息队列
+        # 消息队列，用于线程间通信
         self.message_queue = queue.Queue()
-        self.processing = False
-        self.process = None
 
-        # 设置样式和UI
+        # 设置样式
         self.setup_styles()
         self.setup_ui()
+
+        # 启动消息处理
         self.process_messages()
 
     def setup_styles(self):
-        """设置样式"""
+        """设置ttk样式"""
         style = ttk.Style()
+
+        # 使用默认主题并自定义
         style.theme_use('default')
 
-        # Frame样式
+        # 配置TFrame样式
         style.configure('TFrame', background=self.colors['bg'])
-        style.configure('Card.TFrame',
-                       background=self.colors['white'],
-                       borderwidth=1,
-                       relief='solid')
+        style.configure('Card.TFrame', background=self.colors['white'], relief='flat')
 
-        # Label样式
+        # 配置TLabel样式
         style.configure('TLabel',
                        background=self.colors['bg'],
                        foreground=self.colors['text'],
-                       font=('Helvetica', 11))
+                       font=('SF Pro Display', 11))
         style.configure('Title.TLabel',
-                       font=('Helvetica', 20, 'bold'),
+                       font=('SF Pro Display', 24, 'bold'),
                        foreground=self.colors['primary'])
         style.configure('Card.TLabel',
-                       background=self.colors['white'],
-                       foreground=self.colors['text'])
+                       background=self.colors['white'])
 
-        # Button样式
-        style.configure('TButton',
-                       font=('Helvetica', 11),
-                       padding=(15, 8))
+        # 配置TButton样式
+        style.configure('Primary.TButton',
+                       font=('SF Pro Display', 12, 'bold'),
+                       padding=10)
+        style.map('Primary.TButton',
+                 foreground=[('active', self.colors['white'])],
+                 background=[('active', '#CC0000')])
 
-        # Entry样式
+        # 配置TEntry样式
         style.configure('TEntry',
                        fieldbackground=self.colors['white'],
                        foreground=self.colors['text'],
-                       borderwidth=1,
                        padding=8)
 
-        # Checkbutton样式
+        # 配置TCheckbutton样式
         style.configure('TCheckbutton',
-                       background=self.colors['white'],
+                       background=self.colors['bg'],
                        foreground=self.colors['text'],
-                       font=('Helvetica', 11))
-
-    def setup_ui(self):
-        """设置UI"""
-        # 主容器
-        container = ttk.Frame(self.root, padding="20", style='TFrame')
-        container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        # 标题
-        title = ttk.Label(container, text="🎬 YouTube 字幕生成器",
-                         style='Title.TLabel')
-        title.grid(row=0, column=0, pady=(0, 20))
-
-        # URL卡片
-        url_card = self.create_card(container, "YouTube 视频链接")
-        url_card.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=10)
-
-        ttk.Label(url_card, text="单个视频URL:", style='Card.TLabel').grid(
-            row=0, column=0, sticky=tk.W, pady=5)
-        self.url_entry = ttk.Entry(url_card, width=70)
-        self.url_entry.grid(row=0, column=1, padx=(10, 0), sticky=(tk.W, tk.E))
-
-        ttk.Label(url_card, text="批量URL (每行一个):", style='Card.TLabel').grid(
-            row=1, column=0, sticky=(tk.W, tk.N), pady=(10, 5))
-        self.url_text = tk.Text(url_card, width=70, height=4,
-                               font=('Helvetica', 11),
-                               bg=self.colors['white'],
-                               fg=self.colors['text'],
-                               relief='solid',
-                               borderwidth=1)
-        self.url_text.grid(row=1, column=1, padx=(10, 0), pady=(10, 0),
-                          sticky=(tk.W, tk.E))
-
-        # 配置卡片
-        config_card = self.create_card(container, "配置选项")
-        config_card.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=10)
-
-        # 输出目录
-        ttk.Label(config_card, text="输出目录:", style='Card.TLabel').grid(
-            row=0, column=0, sticky=tk.W, pady=5)
-        dir_frame = ttk.Frame(config_card, style='Card.TFrame')
-        dir_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0))
-        self.output_dir_entry = ttk.Entry(dir_frame, width=55)
-        self.output_dir_entry.insert(0, self.output_dir)
-        self.output_dir_entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        ttk.Button(dir_frame, text="浏览", command=self.browse_output_dir).grid(
-            row=0, column=1, padx=(5, 0))
-        dir_frame.columnconfigure(0, weight=1)
-
-        # Cookies
-        ttk.Label(config_card, text="Cookies文件:", style='Card.TLabel').grid(
-            row=1, column=0, sticky=tk.W, pady=5)
-        cookies_frame = ttk.Frame(config_card, style='Card.TFrame')
-        cookies_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
-        self.cookies_entry = ttk.Entry(cookies_frame, width=55)
-        self.cookies_entry.insert(0, self.cookies_file)
-        self.cookies_entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        ttk.Button(cookies_frame, text="浏览", command=self.browse_cookies).grid(
-            row=0, column=1, padx=(5, 0))
-        cookies_frame.columnconfigure(0, weight=1)
-
-        self.use_cookies_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(config_card, text="使用Cookies (下载受限视频)",
-                       variable=self.use_cookies_var).grid(
-            row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
-
-        # 高级配置(可折叠)
-        ttk.Label(config_card, text="Whisper路径:", style='Card.TLabel').grid(
-            row=3, column=0, sticky=tk.W, pady=5)
-        self.whisper_bin_entry = ttk.Entry(config_card, width=60)
-        self.whisper_bin_entry.insert(0, self.whisper_bin)
-        self.whisper_bin_entry.grid(row=3, column=1, sticky=(tk.W, tk.E),
-                                   padx=(10, 0), pady=5)
-
-        ttk.Label(config_card, text="Whisper模型:", style='Card.TLabel').grid(
-            row=4, column=0, sticky=tk.W, pady=5)
-        self.whisper_model_entry = ttk.Entry(config_card, width=60)
-        self.whisper_model_entry.insert(0, self.whisper_model)
-        self.whisper_model_entry.grid(row=4, column=1, sticky=(tk.W, tk.E),
-                                     padx=(10, 0), pady=5)
-
-        # 按钮区域
-        button_frame = ttk.Frame(container, style='TFrame')
-        button_frame.grid(row=3, column=0, pady=15)
-
-        self.start_button = tk.Button(button_frame,
-                                      text="🚀 开始处理",
-                                      command=self.start_processing,
-                                      bg=self.colors['primary'],
-                                      fg='white',
-                                      font=('Helvetica', 12, 'bold'),
-                                      relief='flat',
-                                      cursor='hand2',
-                                      padx=30,
-                                      pady=10)
-        self.start_button.grid(row=0, column=0, padx=5)
-
-        self.stop_button = tk.Button(button_frame,
-                                     text="⏸ 停止",
-                                     command=self.stop_processing,
-                                     bg='#6B7280',
-                                     fg='white',
-                                     font=('Helvetica', 12, 'bold'),
-                                     relief='flat',
-                                     cursor='hand2',
-                                     state=tk.DISABLED,
-                                     padx=30,
-                                     pady=10)
-        self.stop_button.grid(row=0, column=1, padx=5)
-
-        clear_button = tk.Button(button_frame,
-                                text="🗑 清空日志",
-                                command=self.clear_log,
-                                bg='#E5E7EB',
-                                fg=self.colors['text'],
-                                font=('Helvetica', 12),
-                                relief='flat',
-                                cursor='hand2',
-                                padx=30,
-                                pady=10)
-        clear_button.grid(row=0, column=2, padx=5)
-
-        # 进度条
-        self.progress = ttk.Progressbar(container, mode='indeterminate', length=800)
-        self.progress.grid(row=4, column=0, pady=10, sticky=(tk.W, tk.E))
-
-        # 状态标签
-        self.status_label = tk.Label(container,
-                                     text="✅ 就绪",
-                                     bg=self.colors['bg'],
-                                     fg=self.colors['success'],
-                                     font=('Helvetica', 11, 'bold'))
-        self.status_label.grid(row=5, column=0, sticky=tk.W)
-
-        # 日志卡片
-        log_card = self.create_card(container, "处理日志")
-        log_card.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
-
-        self.log_text = scrolledtext.ScrolledText(log_card,
-                                                  width=90,
-                                                  height=12,
-                                                  font=('Monaco', 10),
-                                                  bg='#1E293B',
-                                                  fg='#E2E8F0',
-                                                  insertbackground='white',
-                                                  relief='flat',
-                                                  state=tk.DISABLED)
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        # 配置日志卡片的网格权重
-        log_card.columnconfigure(0, weight=1)
-        log_card.rowconfigure(0, weight=1)
-
-        # 配置网格权重
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        container.columnconfigure(0, weight=1)
-        container.rowconfigure(6, weight=1)
-        url_card.columnconfigure(1, weight=1)
-        config_card.columnconfigure(1, weight=1)
-
-    def create_card(self, parent, title):
-        """创建卡片组件"""
-        frame = tk.Frame(parent,
-                        bg=self.colors['white'],
-                        relief='flat',
-                        borderwidth=0,
-                        padx=15,
-                        pady=15)
-
-        if title:
-            title_label = tk.Label(frame,
-                                  text=title,
-                                  bg=self.colors['white'],
-                                  fg=self.colors['text'],
-                                  font=('Helvetica', 12, 'bold'))
-            title_label.grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-
-            separator = tk.Frame(frame, height=1, bg=self.colors['border'])
-            separator.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-
-        content_frame = ttk.Frame(frame, style='Card.TFrame')
-        content_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        # 配置网格权重
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=1)
-
-        return content_frame
+                       font=('SF Pro Display', 11))
+        style.configure('Card.TCheckbutton',
+                       background=self.colors['white'])
 
     def process_messages(self):
-        """处理消息队列"""
+        """处理来自工作线程的消息"""
         try:
             while True:
                 msg_type, msg_data = self.message_queue.get_nowait()
@@ -329,10 +146,125 @@ class YouTubeSubtitleGenerator:
         except queue.Empty:
             pass
 
+        # 每100ms检查一次队列
         self.root.after(100, self.process_messages)
 
+    def setup_ui(self):
+        # 主框架
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # 标题
+        title_label = ttk.Label(main_frame, text="YouTube 字幕生成器",
+                               font=("Arial", 16, "bold"))
+        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+
+        # URL输入区域
+        url_frame = ttk.LabelFrame(main_frame, text="YouTube URL", padding="10")
+        url_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+
+        ttk.Label(url_frame, text="视频URL:").grid(row=0, column=0, sticky=tk.W)
+        self.url_entry = ttk.Entry(url_frame, width=70)
+        self.url_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+
+        # 批量URL输入
+        ttk.Label(url_frame, text="批量URL\n(每行一个):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.url_text = scrolledtext.ScrolledText(url_frame, width=70, height=5)
+        self.url_text.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+
+        # 配置区域
+        config_frame = ttk.LabelFrame(main_frame, text="配置选项", padding="10")
+        config_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+
+        # 输出目录
+        ttk.Label(config_frame, text="输出目录:").grid(row=0, column=0, sticky=tk.W)
+        self.output_dir_entry = ttk.Entry(config_frame, width=50)
+        self.output_dir_entry.insert(0, self.output_dir)
+        self.output_dir_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Button(config_frame, text="浏览", command=self.browse_output_dir).grid(row=0, column=2)
+
+        # Cookies文件
+        ttk.Label(config_frame, text="Cookies文件:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.cookies_entry = ttk.Entry(config_frame, width=50)
+        self.cookies_entry.insert(0, self.cookies_file)
+        self.cookies_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        ttk.Button(config_frame, text="浏览", command=self.browse_cookies).grid(row=1, column=2, pady=5)
+
+        # 使用cookies选项
+        self.use_cookies_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(config_frame, text="使用Cookies（需要登录YouTube才能下载某些视频）",
+                       variable=self.use_cookies_var).grid(row=2, column=0, columnspan=3, sticky=tk.W)
+
+        # Whisper配置
+        ttk.Label(config_frame, text="Whisper路径:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.whisper_bin_entry = ttk.Entry(config_frame, width=50)
+        self.whisper_bin_entry.insert(0, self.whisper_bin)
+        self.whisper_bin_entry.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+
+        ttk.Label(config_frame, text="Whisper模型:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        self.whisper_model_entry = ttk.Entry(config_frame, width=50)
+        self.whisper_model_entry.insert(0, self.whisper_model)
+        self.whisper_model_entry.grid(row=4, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+
+        # 按钮区域
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=3, column=0, columnspan=3, pady=10)
+
+        self.start_button = ttk.Button(button_frame, text="开始处理",
+                                       command=self.start_processing, style="Accent.TButton")
+        self.start_button.grid(row=0, column=0, padx=5)
+
+        self.stop_button = ttk.Button(button_frame, text="停止",
+                                      command=self.stop_processing, state=tk.DISABLED)
+        self.stop_button.grid(row=0, column=1, padx=5)
+
+        ttk.Button(button_frame, text="清空日志",
+                  command=self.clear_log).grid(row=0, column=2, padx=5)
+
+        # 进度条
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
+        self.progress.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+
+        # 状态标签
+        self.status_label = ttk.Label(main_frame, text="就绪", foreground="green")
+        self.status_label.grid(row=5, column=0, columnspan=3, sticky=tk.W)
+
+        # 日志区域
+        log_frame = ttk.LabelFrame(main_frame, text="处理日志", padding="10")
+        log_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+
+        self.log_text = scrolledtext.ScrolledText(log_frame, width=80, height=15,
+                                                  state=tk.DISABLED)
+        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # 配置网格权重
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(6, weight=1)
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+
+        self.processing = False
+        self.process = None
+
+    def browse_output_dir(self):
+        directory = filedialog.askdirectory()
+        if directory:
+            self.output_dir_entry.delete(0, tk.END)
+            self.output_dir_entry.insert(0, directory)
+
+    def browse_cookies(self):
+        filename = filedialog.askopenfilename(
+            title="选择Cookies文件",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filename:
+            self.cookies_entry.delete(0, tk.END)
+            self.cookies_entry.insert(0, filename)
+
     def log(self, message):
-        """添加日志(线程安全)"""
+        """添加日志消息(线程安全)"""
         self.message_queue.put(('log', message))
 
     def _do_log(self, message):
@@ -343,40 +275,23 @@ class YouTubeSubtitleGenerator:
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
 
-    def update_status(self, message, color="black"):
-        """更新状态(线程安全)"""
-        self.message_queue.put(('status', {'text': message, 'color': color}))
-
-    def _do_update_status(self, text, color):
-        """实际更新状态(仅在主线程)"""
-        icon = "✅" if "成功" in text or "就绪" in text else "🔄" if "处理" in text else "⚠️"
-        self.status_label.config(text=f"{icon} {text}", fg=color)
-
     def clear_log(self):
         """清空日志"""
         self.log_text.config(state=tk.NORMAL)
         self.log_text.delete(1.0, tk.END)
         self.log_text.config(state=tk.DISABLED)
 
-    def browse_output_dir(self):
-        """选择输出目录"""
-        directory = filedialog.askdirectory()
-        if directory:
-            self.output_dir_entry.delete(0, tk.END)
-            self.output_dir_entry.insert(0, directory)
+    def update_status(self, message, color="black"):
+        """更新状态标签(线程安全)"""
+        self.message_queue.put(('status', {'text': message, 'color': color}))
 
-    def browse_cookies(self):
-        """选择cookies文件"""
-        filename = filedialog.askopenfilename(
-            title="选择Cookies文件",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if filename:
-            self.cookies_entry.delete(0, tk.END)
-            self.cookies_entry.insert(0, filename)
+    def _do_update_status(self, text, color):
+        """实际更新状态(仅在主线程)"""
+        self.status_label.config(text=text, foreground=color)
 
     def start_processing(self):
         """开始处理"""
+        # 获取URL列表
         urls = []
         single_url = self.url_entry.get().strip()
         if single_url:
@@ -392,6 +307,7 @@ class YouTubeSubtitleGenerator:
             messagebox.showwarning("警告", "请输入至少一个YouTube URL")
             return
 
+        # 验证配置
         output_dir = self.output_dir_entry.get().strip()
         if not output_dir:
             messagebox.showwarning("警告", "请选择输出目录")
@@ -407,12 +323,15 @@ class YouTubeSubtitleGenerator:
             messagebox.showwarning("警告", f"Whisper模型不存在: {whisper_model}")
             return
 
+        # 开始处理
         self.processing = True
         self.message_queue.put(('button_state', {'button': 'start', 'state': tk.DISABLED}))
         self.message_queue.put(('button_state', {'button': 'stop', 'state': tk.NORMAL}))
         self.message_queue.put(('progress_start', None))
 
-        thread = threading.Thread(target=self.process_urls, args=(urls,), daemon=True)
+        # 在新线程中处理
+        thread = threading.Thread(target=self.process_urls, args=(urls,))
+        thread.daemon = True
         thread.start()
 
     def stop_processing(self):
@@ -420,8 +339,8 @@ class YouTubeSubtitleGenerator:
         self.processing = False
         if self.process:
             self.process.terminate()
-        self.update_status("已停止", self.colors['error'])
-        self.log("⏸ 用户停止了处理")
+        self.update_status("已停止", "red")
+        self.log("用户停止了处理")
         self.message_queue.put(('button_state', {'button': 'start', 'state': tk.NORMAL}))
         self.message_queue.put(('button_state', {'button': 'stop', 'state': tk.DISABLED}))
         self.message_queue.put(('progress_stop', None))
@@ -434,6 +353,7 @@ class YouTubeSubtitleGenerator:
         whisper_bin = self.whisper_bin_entry.get().strip()
         whisper_model = self.whisper_model_entry.get().strip()
 
+        # 确保输出目录存在
         os.makedirs(output_dir, exist_ok=True)
 
         total = len(urls)
@@ -443,56 +363,59 @@ class YouTubeSubtitleGenerator:
             if not self.processing:
                 break
 
-            self.update_status(f"处理 {idx}/{total}: {url}", self.colors['secondary'])
+            self.update_status(f"处理 {idx}/{total}: {url}", "blue")
             self.log(f"\n{'='*60}")
-            self.log(f"🎯 处理第 {idx}/{total} 个视频: {url}")
+            self.log(f"处理第 {idx}/{total} 个视频: {url}")
 
             try:
-                self.log("📥 步骤1: 下载音频...")
+                # 步骤1: 下载MP3
+                self.log("步骤1: 下载音频...")
                 mp3_file = self.download_audio(url, output_dir, cookies_file, use_cookies)
 
                 if not mp3_file or not self.processing:
                     continue
 
-                self.log(f"✅ 下载完成: {os.path.basename(mp3_file)}")
+                self.log(f"✓ 下载完成: {os.path.basename(mp3_file)}")
 
-                self.log("🤖 步骤2: 生成字幕...")
+                # 步骤2: 生成字幕
+                self.log("步骤2: 生成字幕...")
                 srt_file = self.generate_subtitle(mp3_file, whisper_bin, whisper_model)
 
                 if srt_file:
-                    self.log(f"✅ 字幕生成完成: {os.path.basename(srt_file)}")
+                    self.log(f"✓ 字幕生成完成: {os.path.basename(srt_file)}")
                     success_count += 1
                 else:
-                    self.log("❌ 字幕生成失败")
+                    self.log("✗ 字幕生成失败")
 
             except Exception as e:
-                self.log(f"❌ 处理失败: {str(e)}")
+                self.log(f"✗ 处理失败: {str(e)}")
 
+        # 完成
         self.message_queue.put(('progress_stop', None))
         self.message_queue.put(('button_state', {'button': 'start', 'state': tk.NORMAL}))
         self.message_queue.put(('button_state', {'button': 'stop', 'state': tk.DISABLED}))
 
         if self.processing:
-            self.update_status(f"完成！成功: {success_count}/{total}", self.colors['success'])
+            self.update_status(f"完成！成功: {success_count}/{total}", "green")
             self.log(f"\n{'='*60}")
-            self.log(f"🎉 全部完成！成功处理 {success_count}/{total} 个视频")
-            self.message_queue.put(('messagebox', {
-                'title': '完成',
-                'message': f'成功处理 {success_count}/{total} 个视频'
-            }))
+            self.log(f"全部完成！成功处理 {success_count}/{total} 个视频")
+            self.message_queue.put(('messagebox', {'title': '完成', 'message': f"成功处理 {success_count}/{total} 个视频"}))
 
     def download_audio(self, url, output_dir, cookies_file, use_cookies):
-        """下载音频"""
+        """下载YouTube音频为MP3"""
         try:
+            # 查找yt-dlp的完整路径
             yt_dlp_path = find_executable("yt-dlp")
+
+            # 查找ffmpeg的完整路径
             ffmpeg_path = find_executable("ffmpeg")
             ffmpeg_dir = os.path.dirname(ffmpeg_path) if ffmpeg_path else "/usr/local/bin"
 
             cmd = [
                 yt_dlp_path,
-                "-x",
+                "-x",  # 仅提取音频
                 "--audio-format", "mp3",
-                "--ffmpeg-location", ffmpeg_dir,
+                "--ffmpeg-location", ffmpeg_dir,  # 指定ffmpeg位置
                 "-o", f"{output_dir}/%(title)s.%(ext)s"
             ]
 
@@ -501,6 +424,8 @@ class YouTubeSubtitleGenerator:
 
             cmd.append(url)
 
+            self.log(f"执行命令: {' '.join(cmd)}")
+
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -508,6 +433,7 @@ class YouTubeSubtitleGenerator:
                 universal_newlines=True
             )
 
+            # 实时输出日志
             for line in self.process.stdout:
                 if not self.processing:
                     self.process.terminate()
@@ -519,18 +445,20 @@ class YouTubeSubtitleGenerator:
             self.process.wait()
 
             if self.process.returncode != 0:
-                self.log(f"❌ 下载失败，退出码: {self.process.returncode}")
+                self.log(f"下载失败，退出码: {self.process.returncode}")
                 return None
 
+            # 查找下载的MP3文件（最新的）
             mp3_files = list(Path(output_dir).glob("*.mp3"))
             if mp3_files:
-                return str(max(mp3_files, key=lambda p: p.stat().st_mtime))
+                mp3_file = max(mp3_files, key=lambda p: p.stat().st_mtime)
+                return str(mp3_file)
             else:
-                self.log("❌ 找不到下载的MP3文件")
+                self.log("找不到下载的MP3文件")
                 return None
 
         except Exception as e:
-            self.log(f"❌ 下载出错: {str(e)}")
+            self.log(f"下载出错: {str(e)}")
             return None
 
     def generate_subtitle(self, mp3_file, whisper_bin, whisper_model):
@@ -538,8 +466,9 @@ class YouTubeSubtitleGenerator:
         try:
             srt_file = f"{mp3_file}.srt"
 
+            # 检查字幕是否已存在
             if os.path.exists(srt_file) and os.path.getsize(srt_file) > 0:
-                self.log(f"ℹ️  字幕已存在，跳过: {os.path.basename(srt_file)}")
+                self.log(f"字幕已存在，跳过: {os.path.basename(srt_file)}")
                 return srt_file
 
             cmd = [
@@ -552,6 +481,8 @@ class YouTubeSubtitleGenerator:
                 "-p", "1"
             ]
 
+            self.log(f"执行命令: {' '.join(cmd)}")
+
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -560,28 +491,31 @@ class YouTubeSubtitleGenerator:
                 cwd=os.path.dirname(mp3_file)
             )
 
+            # 实时输出日志
             for line in self.process.stdout:
                 if not self.processing:
                     self.process.terminate()
                     return None
                 line = line.strip()
-                if line and ("[" in line or "whisper" in line.lower()):
-                    self.log(f"  {line}")
+                if line:
+                    # 提取进度信息
+                    if "whisper_print_progress" in line or "[" in line:
+                        self.log(f"  {line}")
 
             self.process.wait()
 
             if self.process.returncode != 0:
-                self.log(f"❌ 字幕生成失败，退出码: {self.process.returncode}")
+                self.log(f"字幕生成失败，退出码: {self.process.returncode}")
                 return None
 
             if os.path.exists(srt_file) and os.path.getsize(srt_file) > 0:
                 return srt_file
             else:
-                self.log("❌ 字幕文件未生成")
+                self.log("字幕文件未生成")
                 return None
 
         except Exception as e:
-            self.log(f"❌ 生成字幕出错: {str(e)}")
+            self.log(f"生成字幕出错: {str(e)}")
             return None
 
 def main():
