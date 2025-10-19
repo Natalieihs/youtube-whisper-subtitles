@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.spec
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Icon files (except the final icns)
+icon_*.png
+AppIcon.iconset/
+
+# Media files
+*.mp3
+*.mp4
+*.webm
+*.wav
+*.avi
+*.mkv
+
+# Subtitle files
+*.srt
+*.ass
+*.vtt
+
+# Logs
+*.log
+whisper_metal.log
+batch_metal.log
+
+# YouTube cookies
+youtube.txt
+*.txt
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Test files
+test*.py
+example*.py
+
+# Large output files
+AWS课程完整字幕.md
