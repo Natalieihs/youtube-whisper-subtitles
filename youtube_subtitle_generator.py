@@ -323,11 +323,11 @@ class YouTubeSubtitleGenerator:
             messagebox.showwarning("警告", f"Whisper模型不存在: {whisper_model}")
             return
 
-        # 开始处理
+        # 开始处理 - 直接操作UI（这是在主线程中）
         self.processing = True
-        self.message_queue.put(('button_state', {'button': 'start', 'state': tk.DISABLED}))
-        self.message_queue.put(('button_state', {'button': 'stop', 'state': tk.NORMAL}))
-        self.message_queue.put(('progress_start', None))
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        self.progress.start()
 
         # 在新线程中处理
         thread = threading.Thread(target=self.process_urls, args=(urls,))
@@ -335,15 +335,16 @@ class YouTubeSubtitleGenerator:
         thread.start()
 
     def stop_processing(self):
-        """停止处理"""
+        """停止处理 - 这是在主线程中调用的"""
         self.processing = False
         if self.process:
             self.process.terminate()
         self.update_status("已停止", "red")
         self.log("用户停止了处理")
-        self.message_queue.put(('button_state', {'button': 'start', 'state': tk.NORMAL}))
-        self.message_queue.put(('button_state', {'button': 'stop', 'state': tk.DISABLED}))
-        self.message_queue.put(('progress_stop', None))
+        # 直接操作UI（这是在主线程中）
+        self.start_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
+        self.progress.stop()
 
     def process_urls(self, urls):
         """处理URL列表"""
