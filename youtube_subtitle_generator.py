@@ -214,12 +214,15 @@ class YouTubeSubtitleGenerator:
                                        command=self.start_processing, style="Accent.TButton")
         self.start_button.grid(row=0, column=0, padx=5)
 
+        ttk.Button(button_frame, text="处理本地MP3",
+                  command=self.process_local_mp3, style="Accent.TButton").grid(row=0, column=1, padx=5)
+
         self.stop_button = ttk.Button(button_frame, text="停止",
                                       command=self.stop_processing, state=tk.DISABLED)
-        self.stop_button.grid(row=0, column=1, padx=5)
+        self.stop_button.grid(row=0, column=2, padx=5)
 
         ttk.Button(button_frame, text="清空日志",
-                  command=self.clear_log).grid(row=0, column=2, padx=5)
+                  command=self.clear_log).grid(row=0, column=3, padx=5)
 
         # 进度条
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
@@ -288,6 +291,82 @@ class YouTubeSubtitleGenerator:
     def _do_update_status(self, text, color):
         """实际更新状态(仅在主线程)"""
         self.status_label.config(text=text, foreground=color)
+
+    def process_local_mp3(self):
+        """处理本地MP3文件"""
+        # 让用户选择包含MP3文件的文件夹
+        directory = filedialog.askdirectory(title="选择包含MP3文件的文件夹")
+        if not directory:
+            return
+
+        # 验证配置
+        whisper_bin = self.whisper_bin_entry.get().strip()
+        if not os.path.exists(whisper_bin):
+            messagebox.showwarning("警告", f"Whisper程序不存在: {whisper_bin}")
+            return
+
+        whisper_model = self.whisper_model_entry.get().strip()
+        if not os.path.exists(whisper_model):
+            messagebox.showwarning("警告", f"Whisper模型不存在: {whisper_model}")
+            return
+
+        # 扫描MP3文件
+        mp3_files = list(Path(directory).glob("*.mp3"))
+        if not mp3_files:
+            messagebox.showwarning("警告", f"在 {directory} 中没有找到MP3文件")
+            return
+
+        self.log(f"找到 {len(mp3_files)} 个MP3文件")
+
+        # 开始处理
+        self.processing = True
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        self.progress.start()
+
+        # 在新线程中处理
+        thread = threading.Thread(target=self.process_local_mp3_files, args=(mp3_files, whisper_bin, whisper_model))
+        thread.daemon = True
+        thread.start()
+
+    def process_local_mp3_files(self, mp3_files, whisper_bin, whisper_model):
+        """批量处理本地MP3文件"""
+        total = len(mp3_files)
+        success_count = 0
+
+        for idx, mp3_file in enumerate(mp3_files, 1):
+            if not self.processing:
+                break
+
+            mp3_path = str(mp3_file)
+            self.update_status(f"处理 {idx}/{total}: {mp3_file.name}", "blue")
+            self.log(f"\n{'='*60}")
+            self.log(f"处理第 {idx}/{total} 个文件: {mp3_file.name}")
+
+            try:
+                # 生成字幕
+                self.log("生成字幕...")
+                srt_file = self.generate_subtitle(mp3_path, whisper_bin, whisper_model)
+
+                if srt_file:
+                    self.log(f"✓ 字幕生成完成: {os.path.basename(srt_file)}")
+                    success_count += 1
+                else:
+                    self.log("✗ 字幕生成失败")
+
+            except Exception as e:
+                self.log(f"✗ 处理失败: {str(e)}")
+
+        # 完成
+        self.message_queue.put(('progress_stop', None))
+        self.message_queue.put(('button_state', {'button': 'start', 'state': tk.NORMAL}))
+        self.message_queue.put(('button_state', {'button': 'stop', 'state': tk.DISABLED}))
+
+        if self.processing:
+            self.update_status(f"完成！成功: {success_count}/{total}", "green")
+            self.log(f"\n{'='*60}")
+            self.log(f"全部完成！成功处理 {success_count}/{total} 个文件")
+            self.message_queue.put(('messagebox', {'title': '完成', 'message': f"成功处理 {success_count}/{total} 个MP3文件"}))
 
     def start_processing(self):
         """开始处理"""
