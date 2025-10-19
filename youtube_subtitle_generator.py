@@ -445,16 +445,17 @@ class YouTubeSubtitleGenerator:
 
             self.process.wait()
 
-            if self.process.returncode != 0:
-                self.log(f"下载失败，退出码: {self.process.returncode}")
-                return None
-
-            # 查找下载的MP3文件（最新的）
+            # 先检查文件是否存在（优先级高于退出码）
+            # 因为即使有警告导致退出码非0，文件也可能已经下载成功
             mp3_files = list(Path(output_dir).glob("*.mp3"))
             if mp3_files:
                 mp3_file = max(mp3_files, key=lambda p: p.stat().st_mtime)
+                if self.process.returncode != 0:
+                    self.log(f"注意: yt-dlp 返回退出码 {self.process.returncode}，但文件已下载")
                 return str(mp3_file)
             else:
+                # 文件不存在才报告失败
+                self.log(f"下载失败，退出码: {self.process.returncode}")
                 self.log("找不到下载的MP3文件")
                 return None
 
