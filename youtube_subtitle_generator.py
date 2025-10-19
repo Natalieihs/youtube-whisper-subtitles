@@ -295,8 +295,28 @@ class YouTubeSubtitleGenerator:
     def process_local_mp3(self):
         """处理本地MP3文件"""
         # 让用户选择包含MP3文件的文件夹
-        directory = filedialog.askdirectory(title="选择包含MP3文件的文件夹")
-        if not directory:
+        root_directory = filedialog.askdirectory(title="选择包含MP3文件的文件夹")
+        if not root_directory:
+            return
+
+        # 获取所有子文件夹（包括当前文件夹）
+        root_path = Path(root_directory)
+        subdirs = [root_path] + [d for d in root_path.rglob("*") if d.is_dir()]
+
+        # 筛选包含MP3文件的文件夹
+        folders_with_mp3 = []
+        for folder in subdirs:
+            mp3_count = len(list(folder.glob("*.mp3")))
+            if mp3_count > 0:
+                folders_with_mp3.append((folder, mp3_count))
+
+        if not folders_with_mp3:
+            messagebox.showwarning("警告", f"在 {root_directory} 及其子文件夹中没有找到MP3文件")
+            return
+
+        # 显示文件夹选择对话框
+        selected_folders = self.show_folder_selection_dialog(root_directory, folders_with_mp3)
+        if not selected_folders:
             return
 
         # 验证配置
@@ -310,13 +330,12 @@ class YouTubeSubtitleGenerator:
             messagebox.showwarning("警告", f"Whisper模型不存在: {whisper_model}")
             return
 
-        # 扫描MP3文件（包括子文件夹）
-        mp3_files = list(Path(directory).rglob("*.mp3"))
-        if not mp3_files:
-            messagebox.showwarning("警告", f"在 {directory} 及其子文件夹中没有找到MP3文件")
-            return
+        # 收集选中文件夹中的所有MP3文件
+        mp3_files = []
+        for folder in selected_folders:
+            mp3_files.extend(list(folder.glob("*.mp3")))
 
-        self.log(f"找到 {len(mp3_files)} 个MP3文件（包括子文件夹）")
+        self.log(f"从 {len(selected_folders)} 个文件夹中找到 {len(mp3_files)} 个MP3文件")
 
         # 开始处理
         self.processing = True
@@ -328,6 +347,83 @@ class YouTubeSubtitleGenerator:
         thread = threading.Thread(target=self.process_local_mp3_files, args=(mp3_files, whisper_bin, whisper_model))
         thread.daemon = True
         thread.start()
+
+    def show_folder_selection_dialog(self, root_dir, folders_with_mp3):
+        """显示文件夹选择对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("选择要处理的文件夹")
+        dialog.geometry("600x400")
+
+        # 说明文字
+        ttk.Label(dialog, text=f"在 {root_dir} 中找到以下包含MP3的文件夹：",
+                 font=("Arial", 12, "bold")).pack(pady=10)
+
+        # 创建滚动框
+        frame = ttk.Frame(dialog)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        scrollbar = ttk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        canvas = tk.Canvas(frame, yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=canvas.yview)
+
+        inner_frame = ttk.Frame(canvas)
+        canvas.create_window((0, 0), window=inner_frame, anchor='nw')
+
+        # 存储复选框变量
+        checkbox_vars = []
+        root_path = Path(root_dir)
+
+        for folder, mp3_count in folders_with_mp3:
+            var = tk.BooleanVar(value=True)  # 默认全选
+            checkbox_vars.append((var, folder))
+
+            # 计算相对路径显示
+            try:
+                relative_path = folder.relative_to(root_path)
+                display_text = f"{relative_path}  ({mp3_count} 个MP3)"
+            except ValueError:
+                display_text = f"{folder.name}  ({mp3_count} 个MP3)"
+
+            ttk.Checkbutton(inner_frame, text=display_text, variable=var).pack(anchor='w', pady=2)
+
+        inner_frame.update_idletasks()
+        canvas.config(scrollregion=canvas.bbox("all"))
+
+        # 按钮区域
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+
+        selected_folders = []
+
+        def on_confirm():
+            selected_folders.extend([folder for var, folder in checkbox_vars if var.get()])
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        def select_all():
+            for var, _ in checkbox_vars:
+                var.set(True)
+
+        def deselect_all():
+            for var, _ in checkbox_vars:
+                var.set(False)
+
+        ttk.Button(button_frame, text="全选", command=select_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="全不选", command=deselect_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="确定", command=on_confirm, style="Accent.TButton").pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="取消", command=on_cancel).pack(side=tk.LEFT, padx=5)
+
+        # 等待对话框关闭
+        dialog.transient(self.root)
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+
+        return selected_folders
 
     def process_local_mp3_files(self, mp3_files, whisper_bin, whisper_model):
         """批量处理本地MP3文件"""
